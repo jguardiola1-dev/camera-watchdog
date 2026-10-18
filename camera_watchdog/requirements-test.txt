@@ -1,0 +1,5 @@
+# Local verification only. The production image uses Alpine packages.
+opencv-python-headless>=4.11,<5
+numpy>=2,<3
+Flask>=3,<4
+Pillow>=11,<13

@@ -1,0 +1,122 @@
+name: Build and publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r camera_watchdog/requirements-test.txt
+      - name: Run synthetic tests
+        working-directory: camera_watchdog
+        run: python -m unittest discover -s tests -v
+
+  prepare:
+    name: Prepare architectures
+    needs: tests
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read app version
+        id: version
+        run: |
+          sed -n 's/^version: "\(.*\)"$/version=\1/p' camera_watchdog/config.yaml >> "$GITHUB_OUTPUT"
+      - name: Prepare native build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        with:
+          architectures: '["aarch64", "amd64"]'
+          image-name: camera-watchdog
+          registry-prefix: ghcr.io/jguardiola1-dev
+
+  build:
+    name: Build and check ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build native image for testing
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: ./camera_watchdog
+          image: ${{ matrix.image }}
+          image-tags: ${{ needs.prepare.outputs.version }}
+          version: ${{ needs.prepare.outputs.version }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          cosign: 'false'
+          push: 'false'
+          load: 'true'
+      - name: Check native runtime and web pages
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: docker run --rm -i --entrypoint python3 "$IMAGE:$VERSION" - < scripts/smoke_image.py
+      - name: Publish tested native image
+        if: github.event_name != 'pull_request' && github.repository == 'jguardiola1-dev/camera-watchdog'
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: ./camera_watchdog
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          version: ${{ needs.prepare.outputs.version }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          push: 'true'
+          skip-existing: ${{ needs.prepare.outputs.version }}
+
+  manifest:
+    name: Publish multi-arch image
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request' && github.repository == 'jguardiola1-dev/camera-watchdog'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+      id-token: write
+    steps:
+      - name: Publish manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.09.0
+        with:
+          architectures: '["aarch64", "amd64"]'
+          image-name: camera-watchdog
+          registry-prefix: ghcr.io/jguardiola1-dev
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          skip-existing: ${{ needs.prepare.outputs.version }}

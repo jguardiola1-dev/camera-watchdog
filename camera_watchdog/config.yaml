@@ -1,0 +1,56 @@
+name: "Camera Watchdog"
+description: "Vigilancia Census con referencias de día y noche"
+version: "3.2.0"
+slug: "camera_watchdog"
+init: false
+url: "https://github.com/jguardiola1-dev/camera-watchdog"
+image: "ghcr.io/jguardiola1-dev/camera-watchdog"
+
+arch:
+  - aarch64
+  - amd64
+
+ingress: true
+ingress_port: 8099
+
+homeassistant_api: true
+
+panel_icon: "mdi:cctv"
+panel_title: "Camera Watchdog"
+panel_admin: true
+
+options:
+  census_alarms_enabled: false
+  detailed_log: true
+  orb_observation: true
+  orb_confirmations: 3
+  orb_translation_percent: 1.0
+  orb_rotation_degrees: 0.75
+  orb_scale_percent: 1.5
+  observation_interval_seconds: 30
+  observation_snapshot_seconds: 60
+  observation_retention_days: 7
+  observation_max_mb: 512
+  census_observation: true
+  census_confirmations: 2
+  census_block_distance: 0.25
+  census_changed_block_ratio: 0.60
+  census_stable_block_ratio: 0.15
+
+schema:
+  census_alarms_enabled: bool
+  detailed_log: bool
+  orb_observation: bool
+  orb_confirmations: int(2,10)
+  orb_translation_percent: float(0.1,20)
+  orb_rotation_degrees: float(0.1,20)
+  orb_scale_percent: float(0.1,20)
+  observation_interval_seconds: int(10,300)
+  observation_snapshot_seconds: int(30,600)
+  observation_retention_days: int(1,30)
+  observation_max_mb: int(32,2048)
+  census_observation: bool
+  census_confirmations: int(2,10)
+  census_block_distance: float(0.05,0.95)
+  census_changed_block_ratio: float(0.2,0.95)
+  census_stable_block_ratio: float(0.01,0.5)

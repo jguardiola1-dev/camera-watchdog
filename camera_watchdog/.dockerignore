@@ -1,0 +1,8 @@
+__pycache__
+**/__pycache__
+*.pyc
+.venv
+tests
+tools
+requirements-test.txt
+*.md
