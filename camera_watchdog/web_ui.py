@@ -26,23 +26,23 @@ def icon(name, size=20):
 
 def header(title, prefix, collection_only):
     mode = ('<span class="mode-pill"><span class="dot"></span>Solo observación</span>'
-            if collection_only else '<span class="mode-pill"><span class="dot"></span>Avisos Census activos</span>')
+            if collection_only else '<span class="mode-pill"><span class="dot"></span>Avisos de cámaras activos</span>')
     notice = ('<aside class="observation-note">' + icon('shield') +
               '<div><strong>Recogida de datos sin alarmas</strong>'
               '<span>Las cámaras capturan y registran cambios. Las alarmas están bloqueadas durante la prueba.</span></div>'
               '<span class="note-tag">Prueba en curso</span></aside>') if collection_only else (
               '<aside class="observation-note">' + icon('shield') +
               '<div><strong>Avisos de cambio de escena activos</strong>'
-              '<span>Solo cámaras habilitadas con referencias Census validadas. '
-              'La desconexión y la imagen sin textura se muestran como incidencias de diagnóstico.</span>'
+              '<span>Census compara referencias validadas. La pérdida persistente de señal avisa en las cámaras con ese check activado. '
+              'Una imagen sin textura se muestra como incidencia de diagnóstico.</span>'
               '<span id="publication-status" role="status">Comprobando conexión con Home Assistant…</span></div></aside>')
     form_heading = (f'<section class="page-heading"><div><span class="eyebrow">CONFIGURACIÓN</span><h1>{esc(title)}</h1><p>Los umbrales y el intervalo de Census se ajustan en las opciones de Camera Watchdog en Home Assistant. Los ajustes del detector anterior se conservan y no intervienen en los avisos actuales.</p></div></section>'
                     if title == 'Añadir cámara' or title.startswith('Editar ') else '')
     return f'''<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><title>{esc(title)} · Camera Watchdog</title>
-<link rel="stylesheet" href="{esc(prefix)}/static/watchdog.css?v=3.1.0-history-page1">
-<script defer src="{esc(prefix)}/static/watchdog.js?v=3.1.0-history-page1"></script></head>
+<link rel="stylesheet" href="{esc(prefix)}/static/watchdog.css?v=3.2.1-signal-loss1">
+<script defer src="{esc(prefix)}/static/watchdog.js?v=3.2.1-signal-loss1"></script></head>
 <body data-prefix="{esc(prefix)}"><a class="skip-link" href="#content">Saltar al contenido</a>
 <header class="topbar"><div class="topbar-inner">
 <a class="brand" href="{esc(prefix)}/"><span class="brand-mark">{icon('camera', 23)}</span>
@@ -57,11 +57,19 @@ def footer():
 
 def presentation(slug, state):
     result = state.get('census') or {}
+    if state.get('signal_loss_enabled') and (state.get('signal_loss') or {}).get('confirmed'):
+        return 'Posible sabotaje · pérdida de señal', 'danger alarm'
+    if state.get('alarms_enabled') is not False and (state.get('changed') or result.get('observed_scene_loss')):
+        return 'Posible sabotaje · cambio persistente', 'danger alarm'
     if state.get('offline') or result.get('status') == 'offline':
+        if state.get('signal_loss_enabled') and (state.get('signal_loss') or {}).get('pending'):
+            return 'Sin conexión · aviso en espera', 'warning'
         return 'Sin conexión', 'danger'
     if not state.get('last_ok'):
         return 'Esperando captura', 'neutral'
     if state.get('alarms_enabled') is False:
+        if state.get('signal_loss_enabled'):
+            return 'Solo aviso por pérdida de señal', 'neutral'
         return 'Avisos desactivados', 'neutral'
     if state.get('changed') or result.get('observed_scene_loss'):
         return 'Posible sabotaje · cambio persistente', 'danger alarm'
@@ -85,7 +93,7 @@ def sabotage_status(camera, state, collection_only, references, publication, now
     if collection_only:
         reason = 'Avisos globales desactivados'
     elif not camera.get('enabled', True):
-        reason = 'Avisos desactivados en esta cámara'
+        reason = 'Avisos Census desactivados en esta cámara'
     elif not any(references.get(kind) for kind in REFERENCE_KINDS):
         reason = 'Sin referencias guardadas'
     elif state.get('offline') or result.get('status') == 'offline':
@@ -114,6 +122,12 @@ def camera_card(camera, state, prefix, census_text=None, orb_text=None, show_act
     sabotage = state.get('sabotage') or {'operational': False, 'label': 'Sabotaje no operativo', 'reason': 'Comprobando disponibilidad'}
     captured_at = state.get('last_capture_at', state.get('last_ok', 0))
     last = time.strftime('%H:%M:%S', time.localtime(captured_at)) if captured_at else '—'
+    signal = state.get('signal_loss') or {}
+    signal_text = ('Aviso por pérdida de señal desactivado' if not state.get('signal_loss_enabled') else
+                   'Pérdida de señal confirmada' if signal.get('confirmed') else
+                   f"Sin señal: {signal.get('elapsed_seconds', 0)} / {signal.get('timeout_seconds', 120)} s · {signal.get('failures', 0)} capturas fallidas" if signal.get('pending') else
+                   'Aviso por pérdida de señal activado' if state.get('signal_loss_enabled') else
+                   'Aviso por pérdida de señal desactivado')
     ref = reference_label(result.get('reference'))
     actions = (f'<div class="camera-actions"><a class="text-link" href="{url}">Ver cámara {icon("arrow",16)}</a><a class="icon-button" href="{url}/edit" aria-label="Configurar {esc(camera["name"])}" title="Configuración">{icon("settings",18)}</a></div>'
                if show_actions else '')
@@ -129,7 +143,7 @@ def camera_card(camera, state, prefix, census_text=None, orb_text=None, show_act
 <div><span>Cambio de escena</span><strong id="ratio-{key}">{percent(result.get('changed_block_ratio'))}</strong></div>
 <div><span>Referencia</span><strong id="reference-{key}">{ref}</strong></div>
 <div><span>Confirmaciones</span><strong id="confirm-{key}">{result.get('pending',0)}<small> / {result.get('required',2)}</small></strong></div></div>
-<p class="camera-context">{'Comparación con las referencias de día y noche.' if result.get('comparison_mode') == 'day_night_references' else 'Comparación con la última escena estable.'}</p>
+<p class="camera-context">{'Comparación con las referencias de día y noche.' if result.get('comparison_mode') == 'day_night_references' else 'Comparación con la última escena estable.'}<br><span id="signal-{key}">{esc(signal_text)}</span></p>
 <details class="diagnostic"><summary>Diagnóstico de la captura</summary><p id="census-{key}">{esc(census_text or label)}</p><p id="orb-{key}">{esc(orb_text or '')}</p></details>
 {actions}</div></article>'''
 
@@ -229,6 +243,7 @@ def detail(camera, state, prefix, collection_only, diagnostics, refs, census_ref
 <details class="card advanced"><summary>Diagnóstico detallado</summary><div class="diagnostic-grid">{diagnostics}</div></details>
 <details class="card advanced"><summary>Controles del diagnóstico anterior</summary><p class="muted">Referencia fija opcional y control del seguimiento anterior. Las imágenes de día y noche son las compartidas que aparecen arriba.</p><div class="reference-grid legacy-references">{legacy}</div><div class="legacy-controls">{post('accept','Aceptar imagen actual como normal','btn2','¿Aceptar la imagen para el seguimiento anterior? Las referencias de día y noche se mantienen.')}</div></details>
 <details class="card advanced danger-zone"><summary>Administrar cámara</summary><p>Eliminar la cámara detendrá su seguimiento.</p>{post('delete','Eliminar cámara','danger','¿Eliminar esta cámara y su configuración?')}</details>''' + footer()
+
 
 
 

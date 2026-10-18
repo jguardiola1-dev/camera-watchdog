@@ -9,6 +9,7 @@ persistentes de escena mediante Census y referencias seleccionadas manualmente.
 - Panel de cámaras integrado en Home Assistant mediante Ingress.
 - Histórico de imágenes y diagnóstico con pausa y borrado independientes.
 - Aviso conjunto en `binary_sensor.sabotaje_cam`, habilitado de forma explícita.
+- Pérdida persistente de señal con check independiente por cámara y espera configurable.
 
 ## Instalación
 

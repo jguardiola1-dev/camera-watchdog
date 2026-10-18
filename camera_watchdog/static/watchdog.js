@@ -64,7 +64,7 @@
       setText('publication-status', pubMessage);
       let online = 0, stable = 0;
       for (const camera of data.cameras) {
-        const slug = camera.slug, census = camera.census || {};
+        const slug = camera.slug, census = camera.census || {}, signal = camera.signal_loss || {};
         const sabotage = camera.sabotage || {operational:false,label:'Sabotaje no operativo',reason:'Comprobando disponibilidad'};
         const protection = document.getElementById('sabotage-' + slug);
         if (protection) protection.className = 'sabotage-status ' + (sabotage.operational ? 'good' : 'danger');
@@ -75,9 +75,11 @@
         const offline = census.status === 'offline' || camera.status === 'Sin imagen';
         if (hasCapture && !offline) online++;
         let label = 'Pendiente de análisis', tone = 'neutral';
-        if (offline) { label = 'Sin conexión'; tone = 'danger'; }
+        if (camera.signal_loss_enabled && signal.confirmed) { label = 'Posible sabotaje · pérdida de señal'; tone = 'danger alarm'; }
+        else if (camera.alarms_enabled !== false && (camera.changed || census.observed_scene_loss)) { label = 'Posible sabotaje · cambio persistente'; tone = 'danger alarm'; }
+        else if (offline) { label = camera.signal_loss_enabled && signal.pending ? 'Sin conexión · aviso en espera' : 'Sin conexión'; tone = camera.signal_loss_enabled && signal.pending ? 'warning' : 'danger'; }
         else if (!hasCapture) label = 'Esperando captura';
-        else if (camera.alarms_enabled === false) label = 'Avisos desactivados';
+        else if (camera.alarms_enabled === false) label = camera.signal_loss_enabled ? 'Solo aviso por pérdida de señal' : 'Avisos desactivados';
         else if (camera.changed || census.observed_scene_loss) { label = 'Posible sabotaje · cambio persistente'; tone = 'danger alarm'; }
         else if (census.status === 'stable') { label = 'Escena estable'; tone = 'good'; stable++; }
         else if (census.status === 'scene_change') { label = 'Cambio en evaluación'; tone = 'warning'; }
@@ -91,6 +93,11 @@
         setText('confirm-' + slug, (census.pending || 0) + ' / ' + (census.required || 2));
         setText('census-' + slug, camera.census_summary);
         setText('orb-' + slug, camera.orb_summary);
+        setText('signal-' + slug, camera.signal_loss_enabled
+          ? signal.confirmed ? 'Pérdida de señal confirmada'
+          : signal.pending ? 'Sin señal: ' + signal.elapsed_seconds + ' / ' + signal.timeout_seconds + ' s · ' + signal.failures + ' capturas fallidas'
+          : 'Aviso por pérdida de señal activado'
+          : 'Aviso por pérdida de señal desactivado');
         const img = document.getElementById('img-' + slug);
         if (img && hasCapture) img.src = prefix + '/image/' + encodeURIComponent(slug) + '/current?ts=' + data.timestamp;
       }

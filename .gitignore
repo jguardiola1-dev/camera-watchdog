@@ -14,6 +14,7 @@ deployment/
 cameras.json
 options.json
 sample_history.json
+*_alarm_state.json
 *.log*
 *.zip
 *.tar

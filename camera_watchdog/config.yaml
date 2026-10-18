@@ -1,6 +1,6 @@
 name: "Camera Watchdog"
 description: "Vigilancia Census con referencias de día y noche"
-version: "3.2.0"
+version: "3.2.1"
 slug: "camera_watchdog"
 init: false
 url: "https://github.com/jguardiola1-dev/camera-watchdog"
@@ -21,6 +21,7 @@ panel_admin: true
 
 options:
   census_alarms_enabled: false
+  signal_loss_timeout_seconds: 120
   detailed_log: true
   orb_observation: true
   orb_confirmations: 3
@@ -39,6 +40,7 @@ options:
 
 schema:
   census_alarms_enabled: bool
+  signal_loss_timeout_seconds: int(30,3600)
   detailed_log: bool
   orb_observation: bool
   orb_confirmations: int(2,10)

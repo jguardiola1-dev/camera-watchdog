@@ -1,6 +1,6 @@
 FROM ghcr.io/home-assistant/base:3.23
 
-ARG BUILD_VERSION=3.2.0
+ARG BUILD_VERSION=3.2.1
 ARG BUILD_ARCH
 LABEL org.opencontainers.image.source="https://github.com/jguardiola1-dev/camera-watchdog"
 LABEL io.hass.version="${BUILD_VERSION}" \

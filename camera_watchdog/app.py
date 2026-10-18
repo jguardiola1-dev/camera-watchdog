@@ -21,7 +21,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from flask import Flask, Response, redirect, request
 import web_ui
 from reference_catalog import REFERENCE_KINDS, REFERENCE_FILES, REFERENCE_GROUPS, saved_reference_paths
-from alarm_policy import AlarmLatches
+from alarm_policy import AlarmLatches, SignalLossMonitor
 from PIL import Image, ImageChops, ImageFilter, ImageStat
 from observation_store import ObservationStore
 
@@ -43,6 +43,7 @@ except ImportError:
 orb_observer = OrbObserver() if OrbObserver is not None else None
 # Publishing remains opt-in, including when upgrading from saved 3.0 options.
 alarm_latches = None
+signal_loss_monitor = None
 alarm_latches_lock = threading.RLock()
 publication_lock = threading.RLock()
 last_ha_publication = {}
@@ -64,6 +65,7 @@ DEFAULT_CAMERA = {
     "name": "",
     "slug": "",
     "enabled": True,
+    "signal_loss_enabled": True,
     "rtsp_url": "",
     "username": "",
     "password": "",
@@ -123,6 +125,35 @@ def get_alarm_latches():
         if alarm_latches is None:
             alarm_latches = AlarmLatches(DATA_DIR / 'census_alarm_state.json')
         return alarm_latches
+
+
+def get_signal_loss_monitor():
+    global signal_loss_monitor
+    with alarm_latches_lock:
+        if signal_loss_monitor is None:
+            signal_loss_monitor = SignalLossMonitor(DATA_DIR / 'signal_loss_alarm_state.json')
+        return signal_loss_monitor
+
+
+def signal_loss_timeout():
+    try:
+        return max(30, min(3600, int(load_options().get('signal_loss_timeout_seconds', 120))))
+    except (TypeError, ValueError, OverflowError):
+        return 120
+
+
+def capture_checked(camera, current):
+    """Count only capture/decode failures, independently of analysis or publication."""
+    monitor = get_signal_loss_monitor()
+    try:
+        capture_frame(camera, current)
+        quality = image_stats(current)
+    except Exception:
+        if camera.get('signal_loss_enabled', False):
+            monitor.failure(camera['slug'])
+        raise
+    monitor.success(camera['slug'])
+    return quality
 
 def write_watchdog_log(line):
     try:
@@ -327,6 +358,8 @@ def capture_frame(camera, dest):
                 or "Error FFmpeg"
             )
 
+        with Image.open(tmp) as image:
+            image.load()
         os.replace(
             tmp,
             dest,
@@ -790,7 +823,7 @@ def orb_details(result):
             'La rotación corresponde a la imagen, no a una orientación 3D calibrada.</p>'
             f'<p><b>Diagnóstico:</b> {reason}</p></div>')
 
-def update_sabotaje_cam():
+def update_sabotaje_cam(allow_unvalidated_clear=False):
     global last_ha_signature, last_ha_time, last_ha_publication
     with publication_lock:
         if collection_only():
@@ -805,22 +838,35 @@ def update_sabotaje_cam():
             # A camera awaiting its initial references cannot block recovery of
             # another camera. Existing confirmed alarms must remain included,
             # even if their references are later removed.
-            cameras = [c for c in enabled if latches.get(c['slug'])
+            scene_cameras = [c for c in enabled if latches.get(c['slug'])
                        or saved_reference_paths(IMAGES_DIR / c['slug'])]
-            pending = [c['name'] for c in enabled if c not in cameras]
-            alarm_cameras = [c["name"] for c in cameras if latches.get(c["slug"])]
+            pending = [c['name'] for c in enabled if c not in scene_cameras]
+            signal_cameras = [c for c in configured if c.get('signal_loss_enabled', False)]
+            timeout = signal_loss_timeout()
+            signal_states = {c['slug']: get_signal_loss_monitor().status(c['slug'], timeout)
+                             for c in signal_cameras}
+            scene_alarms = [c['name'] for c in scene_cameras if latches.get(c['slug'])]
+            signal_alarms = [c['name'] for c in signal_cameras if signal_states[c['slug']]['confirmed']]
+            cameras = [c for c in configured if c in scene_cameras or c in signal_cameras]
+            alarm_cameras = [c['name'] for c in cameras if c['name'] in scene_alarms or c['name'] in signal_alarms]
         except Exception:
             last_ha_publication = {"published": False, "reason": "alarm_state_error"}
             return dict(last_ha_publication)
-        if not alarm_cameras and any(not get_rt(c["slug"]).get("alarm_ready") for c in cameras):
+        if not alarm_cameras and not allow_unvalidated_clear and any(not get_rt(c['slug']).get('alarm_ready')
+                and not signal_states.get(c['slug'], {}).get('capture_validated') for c in scene_cameras):
             last_ha_publication = {"published": False, "reason": "awaiting_reference_validation"}
             return dict(last_ha_publication)
         payload = {"state": "on" if alarm_cameras else "off", "attributes": {
             "friendly_name": "SABOTAJE CAM", "device_class": "problem",
             "camaras_en_sabotaje": alarm_cameras, "numero_camaras": len(alarm_cameras),
             "ultima_camara": alarm_cameras[-1] if alarm_cameras else "",
-            "motivo": "CAMBIO DE ESCENA CENSUS" if alarm_cameras else "ESCENA ESTABLE",
+            "motivo": ("CAMBIO DE ESCENA CENSUS Y PÉRDIDA DE SEÑAL" if scene_alarms and signal_alarms else
+                       "PÉRDIDA PERSISTENTE DE SEÑAL" if signal_alarms else
+                       "CAMBIO DE ESCENA CENSUS" if scene_alarms else "ESCENA ESTABLE"),
             "algoritmo": "census_day_night", "camaras_habilitadas": [c["name"] for c in cameras],
+            "camaras_cambio_escena": scene_alarms, "camaras_sin_senal": signal_alarms,
+            "camaras_aviso_senal_habilitado": [c['name'] for c in signal_cameras],
+            "espera_perdida_senal_segundos": timeout,
             "camaras_pendientes_referencias": pending}}
         signature = json.dumps(payload, sort_keys=True)
         if signature == last_ha_signature and time.monotonic() - last_ha_time < 300:
@@ -884,10 +930,9 @@ def process_camera(camera):
     slug = camera["slug"]
     current = image_path(slug, "current")
     set_rt(slug, status="Capturando", last_error="")
-    capture_frame(camera, current)
+    brightness, contrast, detail = capture_checked(camera, current)
     observe_geometry(camera, current)
     census = observe_census(camera, current)
-    brightness, contrast, detail = image_stats(current)
     latched, ready = get_alarm_latches().update(slug, census)
     active = not collection_only() and camera.get("enabled", True)
     changed = active and latched
@@ -996,7 +1041,10 @@ def supervision_state(camera):
     # Display the current checkbox immediately, without discarding diagnostic
     # history or waiting for the next capture to overwrite runtime.changed.
     state['alarms_enabled'] = not collection_only() and camera.get('enabled', True)
-    state['changed'] = bool(state.get('changed')) and state['alarms_enabled']
+    state['signal_loss_enabled'] = not collection_only() and camera.get('signal_loss_enabled', False)
+    state['signal_loss'] = get_signal_loss_monitor().status(camera['slug'], signal_loss_timeout())
+    state['changed'] = ((bool(state.get('changed')) and state['alarms_enabled'])
+                        or (state['signal_loss_enabled'] and state['signal_loss']['confirmed']))
     references = {kind: True for kind in saved_reference_paths(IMAGES_DIR / camera['slug'])}
     state['sabotage'] = web_ui.sabotage_status(camera, state, collection_only(), references,
                                              dict(last_ha_publication))
@@ -1058,6 +1106,8 @@ def api_status():
                 "name": camera["name"],
                 "sabotage": state["sabotage"],
                 "alarms_enabled": state["alarms_enabled"],
+                "signal_loss_enabled": state['signal_loss_enabled'],
+                "signal_loss": state['signal_loss'],
                 "orb": state.get("orb"),
                 "orb_summary": orb_summary(state.get("orb")),
                 "census": state.get("census"),
@@ -1280,6 +1330,11 @@ Habilitar avisos Census en esta cámara
 </label>
 </p>
 
+<p><label><input style="width:auto" type="checkbox" name="signal_loss_enabled"
+    {'checked' if camera.get('signal_loss_enabled', False) else ''}>
+Avisar por pérdida de señal</label>
+<small>Independiente de Census. Requiere al menos dos capturas fallidas y {signal_loss_timeout()} segundos sin recuperar imagen. Se desactiva al volver una captura válida.</small></p>
+
 <button>
 Guardar
 </button>
@@ -1392,6 +1447,7 @@ def camera_save():
             )
             == "on"
         ),
+        "signal_loss_enabled": request.form.get('signal_loss_enabled') == 'on',
         "rtsp_url": (
             request.form.get(
                 "rtsp_url",
@@ -1446,6 +1502,8 @@ def camera_save():
         ),
     }
 
+    if old and old.get('signal_loss_enabled', False) != camera['signal_loss_enabled']:
+        get_signal_loss_monitor().reset(old['slug'])
     if old:
         cameras = [
             camera
@@ -1465,7 +1523,8 @@ def camera_save():
         cameras
     )
 
-    
+    update_sabotaje_cam(allow_unvalidated_clear=bool(old and old.get('signal_loss_enabled')
+                                                   and not camera['signal_loss_enabled']))
     return redirect(
         base() + "/"
     )
@@ -1524,10 +1583,15 @@ def capture_now(slug):
 
     with camera_operation_lock(slug):
         try:
-            capture_frame(camera, image_path(slug, "current"))
-            set_rt(slug, status="Captura manual realizada", last_error="")
+            capture_checked(camera, image_path(slug, "current"))
+            state = get_rt(slug)
+            if state.get('offline') or (state.get('census') or {}).get('status') == 'offline':
+                reset_geometry(slug, 'inconclusive', 'manual_capture_pending_analysis')
+            set_rt(slug, status="Captura manual realizada", offline=False, last_error="")
         except Exception as error:
-            set_rt(slug, status="Error de captura", last_error=safe_capture_error(error))
+            reset_geometry(slug, 'offline', 'no_valid_capture')
+            set_rt(slug, status="Sin imagen", offline=True, last_error=safe_capture_error(error))
+        update_sabotaje_cam()
 
     return redirect(
         base()

@@ -125,7 +125,7 @@ class OperationalTests(unittest.TestCase):
         self.assertTrue(self.app.get_rt('porche')['changed'])
         self.assertTrue(self.app.get_alarm_latches().get('porche'))
         page=client.get('/').get_data(as_text=True)
-        self.assertIn('Avisos desactivados',page)
+        self.assertIn('Avisos Census desactivados',page)
         self.assertNotIn('class="badge danger alarm"',page)
         self.app.update_sabotaje_cam()
         self.assertEqual(self.payloads()[-1]['state'],'off')

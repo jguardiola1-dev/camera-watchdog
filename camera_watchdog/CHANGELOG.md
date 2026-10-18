@@ -1,5 +1,14 @@
 # Cambios
 
+## 3.2.1
+
+- Aviso por pérdida persistente de señal con check independiente por cámara.
+- Espera configurable de 120 segundos inicialmente y al menos dos capturas fallidas.
+- Recuperación del aviso al recibir una captura válida; los cambios de escena confirmados siguen activos.
+- El sensor conjunto identifica las cámaras afectadas y el motivo de cada tipo de aviso.
+- Los avisos de señal confirmados se conservan al reiniciar.
+- Se conserva la última imagen válida si FFmpeg entrega un archivo no decodificable.
+
 ## 3.2.0
 
 - Primera distribución preparada para un repositorio de Home Assistant.

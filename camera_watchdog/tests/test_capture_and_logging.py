@@ -92,6 +92,17 @@ class CaptureAndLoggingTests(unittest.TestCase):
         self.assertEqual(self.app.get_rt('porche')['last_capture_at'],100)
         self.assertFalse(self.current.with_suffix('.tmp.jpg').exists())
 
+    def test_success_exit_with_invalid_frame_preserves_last_valid_image(self):
+        self.app.set_rt('porche', last_capture_at=100)
+        def corrupt(command, **kwargs):
+            Path(command[-1]).write_bytes(b'partial jpeg')
+            return SimpleNamespace(returncode=0)
+        with patch.object(self.app.subprocess, 'run', side_effect=corrupt):
+            with self.assertRaises(Exception):
+                self.app.capture_frame(self.camera, self.current)
+        self.assertEqual(self.current.read_bytes(), self.jpeg)
+        self.assertEqual(self.app.get_rt('porche')['last_capture_at'], 100)
+
     def test_concurrent_logging_preserves_whole_lines(self):
         messages=['camera-%d event-%d'%(camera,event) for camera in range(6) for event in range(40)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:

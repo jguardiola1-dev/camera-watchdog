@@ -228,11 +228,11 @@ class LegacyIsolationTests(unittest.TestCase):
                             ("LOG_FILE", folder / "watchdog.log"),
                             ("runtime", {}), ("orb_observer", OrbObserver()),
                             ("census_observers", {}), ("census_pending_evidence", {}),
-                            ("observation_store", None)]:
+                            ("observation_store", None), ("signal_loss_monitor", None)]:
             p = patch.object(self.app, name, value)
             p.start()
             self.addCleanup(p.stop)
-        self.camera = dict(self.app.DEFAULT_CAMERA, slug="porche", name="porche")
+        self.camera = dict(self.app.DEFAULT_CAMERA, slug="porche", name="porche", signal_loss_enabled=False)
         self.app.OPTIONS_FILE.write_text(json.dumps({"detailed_log": False}))
         self.app.alarm_latches = None
         self.app.last_ha_signature = None
@@ -303,7 +303,7 @@ class LegacyIsolationTests(unittest.TestCase):
         new_functions = {node.name: ast.dump(node) for node in new.body if isinstance(node, ast.FunctionDef)}
         for name in ("build_rtsp", "clear_alert",
                      "canny_difference", "covered_from_stats",
-                     "camera_save", "accept_current"):
+                     "accept_current"):
             self.assertEqual(old_functions[name], hashlib.sha256(new_functions[name].encode()).hexdigest(), name)
 
     def test_collection_guard_blocks_every_sensor_publish(self):
